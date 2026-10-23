@@ -1,0 +1,80 @@
+name: Build unsigned IPA
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: build-ipa-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          XCODE=$(ls -d /Applications/Xcode_16*.app 2>/dev/null | sort -V | tail -n 1)
+          sudo xcode-select -s "${XCODE:-/Applications/Xcode.app}"
+          xcodebuild -version
+
+      # DerivedData holds compiled objects and the module cache, which is what
+      # makes repeat builds fast. The key changes when sources change; the
+      # restore key falls back to the most recent cache so builds stay incremental.
+      - name: Cache build products
+        uses: actions/cache@v4
+        with:
+          path: build/DerivedData
+          key: derived-data-${{ runner.os }}-${{ hashFiles('**/*.swift', '**/*.pbxproj', '**/*.xcscheme', '**/*.xcassets/**') }}
+          restore-keys: |
+            derived-data-${{ runner.os }}-
+
+      - name: Build (unsigned)
+        run: |
+          set -o pipefail
+          mkdir -p build
+          xcodebuild build \
+            -project PetPals.xcodeproj \
+            -scheme PetPals \
+            -configuration Release \
+            -sdk iphoneos \
+            -destination 'generic/platform=iOS' \
+            -derivedDataPath build/DerivedData \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            | tee build/xcodebuild.log | tail -n 40
+        env:
+          NSUnbufferedIO: "YES"
+
+      - name: Package IPA
+        run: |
+          APP=$(find build/DerivedData/Build/Products/Release-iphoneos -maxdepth 1 -name "*.app" | head -n 1)
+          test -n "$APP" || { echo "No .app produced"; exit 1; }
+          rm -rf Payload && mkdir Payload
+          cp -R "$APP" Payload/
+          zip -qry PetPals-unsigned.ipa Payload
+          ls -lh PetPals-unsigned.ipa
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: PetPals-unsigned-ipa
+          path: PetPals-unsigned.ipa
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xcodebuild-log
+          path: build/xcodebuild.log
+          if-no-files-found: ignore
