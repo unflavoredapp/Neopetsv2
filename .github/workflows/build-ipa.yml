@@ -50,7 +50,7 @@ jobs:
             CODE_SIGN_IDENTITY="" \
             CODE_SIGNING_REQUIRED=NO \
             CODE_SIGNING_ALLOWED=NO \
-            | tee build/xcodebuild.log | tail -n 40
+            2>&1 | tee build/xcodebuild.log | tail -n 60
         env:
           NSUnbufferedIO: "YES"
 
